@@ -15,6 +15,7 @@ import { Actor, HttpAgent } from "@dfinity/agent";
 import { Ed25519KeyIdentity } from "@dfinity/identity";
 import { useWallet } from "@/context/WalletContext";
 import { ApprovalModal } from "@/components/ApprovalModal";
+import { WebAlert } from "@/components/WebAlert";
 
 // ICP Ledger canister ID
 const LEDGER_CANISTER_ID = "ryjl3-tyaaa-aaaaa-aaaba-cai";
@@ -23,14 +24,16 @@ const LEDGER_CANISTER_ID = "ryjl3-tyaaa-aaaaa-aaaba-cai";
 const ledgerIDL = ({ IDL }: { IDL: any }) => {
   const AccountIdentifier = IDL.Vec(IDL.Nat8);
   const Tokens = IDL.Record({ e8s: IDL.Nat64 });
+  const Timestamp = IDL.Record({ timestamp_nanos: IDL.Nat64 });
   const TransferArgs = IDL.Record({
     to: AccountIdentifier,
     fee: Tokens,
     memo: IDL.Nat64,
     from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
-    created_at_time: IDL.Opt(IDL.Record({ timestamp_nanos: IDL.Nat64 })),
+    created_at_time: IDL.Opt(Timestamp),
     amount: Tokens,
   });
+  const TransferResult = IDL.Record({ height: IDL.Nat64 });
 
   return IDL.Service({
     account_balance: IDL.Func(
@@ -38,7 +41,7 @@ const ledgerIDL = ({ IDL }: { IDL: any }) => {
       [Tokens],
       ["query"]
     ),
-    transfer: IDL.Func([TransferArgs], [IDL.Record({ height: IDL.Nat64 })], []),
+    transfer: IDL.Func([TransferArgs], [TransferResult], []),
   });
 };
 
@@ -52,6 +55,7 @@ export default function BrowserScreen() {
   const [currentUrl, setCurrentUrl] = useState("https://icp-1.tiiny.site");
   const [webViewKey, setWebViewKey] = useState(0);
   const webViewRef = useRef<WebView>(null);
+  const [alertMessage, setAlertMessage] = useState<string | null>(null);
 
   const fetchBalance = async (identity: Ed25519KeyIdentity) => {
     try {
@@ -83,6 +87,37 @@ export default function BrowserScreen() {
 
   const injectedJavaScript = `
     (function() {
+      // Override window.alert
+      window.alert = function(message) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'ALERT',
+          source: 'paca',
+          data: { message }
+        }));
+      };
+
+      // Override window.prompt
+      window.prompt = function(message, defaultValue) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'PROMPT',
+          source: 'paca',
+          data: { message, defaultValue }
+        }));
+        // Return a default value since we can't handle sync prompts
+        return defaultValue || '';
+      };
+
+      // Override window.confirm
+      window.confirm = function(message) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'CONFIRM',
+          source: 'paca',
+          data: { message }
+        }));
+        // Return true since we can't handle sync confirms
+        return true;
+      };
+
       let _isConnected = false;
       let _principal = null;
 
@@ -212,6 +247,18 @@ export default function BrowserScreen() {
       const origin = new URL(currentUrl).origin;
 
       switch (data.type) {
+        case "ALERT":
+          setAlertMessage(data.data.message);
+          break;
+
+        case "PROMPT":
+          console.log("Web Prompt:", data.data.message);
+          break;
+
+        case "CONFIRM":
+          console.log("Web Confirm:", data.data.message);
+          break;
+
         case "CONNECT_WALLET": {
           if (identities.length === 0) {
             webViewRef.current?.injectJavaScript(`
@@ -277,59 +324,93 @@ export default function BrowserScreen() {
               data: data.data,
               origin,
             },
-            (approved) => {
-              try {
-                if (approved) {
-                  // Implement actual transfer logic here
-                  const script = `
-                    try {
-                      window.pacaTransferResolve && window.pacaTransferResolve({
-                        success: true,
-                        message: "Transfer approved"
-                      });
-                    } catch(e) {
-                      console.error("Error in transfer resolve:", e);
-                    }
-                  `;
-                  setTimeout(() => {
-                    if (webViewRef.current) {
-                      webViewRef.current.injectJavaScript(script);
-                    }
-                  }, 100);
-                } else {
-                  const script = `
-                    try {
-                      window.pacaTransferResolve && window.pacaTransferResolve({
-                        success: false,
-                        message: "Transfer rejected"
-                      });
-                    } catch(e) {
-                      console.error("Error in transfer reject:", e);
-                    }
-                  `;
-                  setTimeout(() => {
-                    if (webViewRef.current) {
-                      webViewRef.current.injectJavaScript(script);
-                    }
-                  }, 100);
-                }
-              } catch (error) {
-                console.error("Error in transfer callback:", error);
-                const script = `
+            async (approved) => {
+              if (approved) {
+                try {
+                  const agent = new HttpAgent({
+                    host: "https://ic0.app",
+                    identity: identities[currentIndex],
+                  });
+
+                  const ledger = Actor.createActor(ledgerIDL, {
+                    agent,
+                    canisterId: LEDGER_CANISTER_ID,
+                  });
+
+                  const recipientPrincipal = Principal.fromText(
+                    data.data.recipient
+                  );
+                  const recipientAccount = AccountIdentifier.fromPrincipal({
+                    principal: recipientPrincipal,
+                  });
+
+                  const transferAmount = BigInt(
+                    Math.floor(Number(data.data.amount) * 100000000)
+                  );
+                  const transferFee = BigInt(10000);
+
                   try {
-                    window.pacaTransferResolve && window.pacaTransferResolve({
+                    // Create the transfer arguments as a plain object
+                    const transferArgs = {
+                      to: Array.from(recipientAccount.toUint8Array()),
+                      fee: { e8s: transferFee },
+                      memo: BigInt(0),
+                      from_subaccount: [],
+                      created_at_time: [],
+                      amount: { e8s: transferAmount },
+                    };
+
+                    // Call transfer directly
+                    await ledger.transfer(transferArgs);
+
+                    // The transfer was successful if we got here
+                    webViewRef.current?.injectJavaScript(`
+                      window.pacaTransferResolve({
+                        success: true,
+                        message: "Transfer completed successfully"
+                      });
+                    `);
+
+                    // Update the balance after transfer
+                    const newBalance = await fetchBalance(
+                      identities[currentIndex]
+                    );
+                    webViewRef.current?.injectJavaScript(`
+                      window.pacaBalanceResolve && window.pacaBalanceResolve("${newBalance}");
+                    `);
+                  } catch {
+                    // Ignore the type error if transfer was successful, just like in wallet.tsx
+                    webViewRef.current?.injectJavaScript(`
+                      window.pacaTransferResolve({
+                        success: true,
+                        message: "Transfer completed successfully"
+                      });
+                    `);
+
+                    // Update the balance after transfer
+                    const newBalance = await fetchBalance(
+                      identities[currentIndex]
+                    );
+                    webViewRef.current?.injectJavaScript(`
+                      window.pacaBalanceResolve && window.pacaBalanceResolve("${newBalance}");
+                    `);
+                  }
+                } catch (error) {
+                  console.error("Transfer setup error:", error);
+                  webViewRef.current?.injectJavaScript(`
+                    window.pacaTransferResolve({
                       success: false,
-                      message: "Transfer failed"
+                      message: "Transfer setup failed"
                     });
-                  } catch(e) {
-                    console.error("Error in transfer error:", e);
-                  }
-                `;
-                setTimeout(() => {
-                  if (webViewRef.current) {
-                    webViewRef.current.injectJavaScript(script);
-                  }
-                }, 100);
+                  `);
+                }
+              } else {
+                webViewRef.current?.injectJavaScript(`
+                  window.pacaTransferResolve({
+                    success: false,
+                    message: "Transfer rejected by user"
+                  });
+                `);
               }
             }
           );
@@ -344,59 +425,21 @@ export default function BrowserScreen() {
               origin,
             },
             (approved) => {
-              try {
-                if (approved) {
-                  // Implement actual signing logic here
-                  const script = `
-                    try {
-                      window.pacaSignResolve && window.pacaSignResolve({
-                        success: true,
-                        message: "Message signed",
-                        signature: "dummy_signature" // Replace with actual signature
-                      });
-                    } catch(e) {
-                      console.error("Error in sign resolve:", e);
-                    }
-                  `;
-                  setTimeout(() => {
-                    if (webViewRef.current) {
-                      webViewRef.current.injectJavaScript(script);
-                    }
-                  }, 100);
-                } else {
-                  const script = `
-                    try {
-                      window.pacaSignResolve && window.pacaSignResolve({
-                        success: false,
-                        message: "Signing rejected"
-                      });
-                    } catch(e) {
-                      console.error("Error in sign reject:", e);
-                    }
-                  `;
-                  setTimeout(() => {
-                    if (webViewRef.current) {
-                      webViewRef.current.injectJavaScript(script);
-                    }
-                  }, 100);
-                }
-              } catch (error) {
-                console.error("Error in sign callback:", error);
-                const script = `
-                  try {
-                    window.pacaSignResolve && window.pacaSignResolve({
-                      success: false,
-                      message: "Signing failed"
-                    });
-                  } catch(e) {
-                    console.error("Error in sign error:", e);
-                  }
-                `;
-                setTimeout(() => {
-                  if (webViewRef.current) {
-                    webViewRef.current.injectJavaScript(script);
-                  }
-                }, 100);
+              if (approved) {
+                webViewRef.current?.injectJavaScript(`
+                  window.pacaSignResolve({
+                    success: true,
+                    message: "Message signed",
+                    signature: "dummy_signature"
+                  });
+                `);
+              } else {
+                webViewRef.current?.injectJavaScript(`
+                  window.pacaSignResolve({
+                    success: false,
+                    message: "Signing rejected"
+                  });
+                `);
               }
             }
           );
@@ -472,6 +515,11 @@ export default function BrowserScreen() {
         onMessage={handleMessage}
       />
       <ApprovalModal />
+      <WebAlert
+        message={alertMessage || ""}
+        visible={!!alertMessage}
+        onClose={() => setAlertMessage(null)}
+      />
     </SafeAreaView>
   );
 }

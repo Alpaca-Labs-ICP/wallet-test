@@ -19,28 +19,12 @@ export function ApprovalModal() {
 
   const handleApprove = useCallback(() => {
     if (!currentRequest) return;
-    const requestId = currentRequest.id;
-    // Use requestAnimationFrame instead of setTimeout for better timing
-    requestAnimationFrame(() => {
-      try {
-        resolveApprovalRequest(requestId, true);
-      } catch (error) {
-        console.error("Error handling approval:", error);
-      }
-    });
+    resolveApprovalRequest(currentRequest.id, true);
   }, [currentRequest, resolveApprovalRequest]);
 
   const handleReject = useCallback(() => {
     if (!currentRequest) return;
-    const requestId = currentRequest.id;
-    // Use requestAnimationFrame instead of setTimeout for better timing
-    requestAnimationFrame(() => {
-      try {
-        resolveApprovalRequest(requestId, false);
-      } catch (error) {
-        console.error("Error handling rejection:", error);
-      }
-    });
+    resolveApprovalRequest(currentRequest.id, false);
   }, [currentRequest, resolveApprovalRequest]);
 
   const renderContent = useCallback(() => {
@@ -90,7 +74,7 @@ export function ApprovalModal() {
 
   return (
     <Modal
-      animationType="slide"
+      animationType="none"
       transparent={true}
       visible={true}
       onRequestClose={handleReject}
