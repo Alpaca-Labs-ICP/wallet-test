@@ -8,8 +8,11 @@
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "jsEngine": "hermes",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "jsEngine": "jsc",
+      "bundleIdentifier": "com.sebastianrubina.wallettest"
     },
     "android": {
       "adaptiveIcon": {
@@ -36,6 +39,14 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "6549a0e1-e301-4e3b-a5da-aff8ff1a8015"
+      }
     }
   }
 }

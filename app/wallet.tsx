@@ -67,7 +67,9 @@ export default function WalletScreen() {
     seedPhrases,
     setSeedPhrases,
   } = useWallet();
-  const [importSeedPhrase, setImportSeedPhrase] = useState<string>("");
+  const [importSeedPhrase, setImportSeedPhrase] = useState<string>(
+    "ship govern toss other short robust must super across number peanut tooth fruit exist sting cross act autumn pilot drill pulse throw tape recycle"
+  );
   const [showImport, setShowImport] = useState<boolean>(false);
   const [balances, setBalances] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
