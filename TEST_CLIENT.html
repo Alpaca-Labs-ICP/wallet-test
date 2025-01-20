@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PacaWallet Demo</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      button {
+        padding: 10px 20px;
+        margin: 5px;
+        cursor: pointer;
+      }
+      #status {
+        margin: 20px 0;
+        padding: 10px;
+        border-radius: 4px;
+      }
+      .connected {
+        background-color: #d4edda;
+        color: #155724;
+      }
+      .disconnected {
+        background-color: #f8d7da;
+        color: #721c24;
+      }
+      .info {
+        background-color: #e2e3e5;
+        color: #383d41;
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 4px;
+      }
+
+      .modal {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+      }
+      .modal.show {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>PacaWallet Demo</h1>
+
+    <div id="status" class="disconnected">Status: Not Connected</div>
+
+    <button onclick="connectWallet()">Connect Wallet</button>
+    <button onclick="disconnectWallet()">Disconnect Wallet</button>
+    <button onclick="checkBalance()">Check Balance</button>
+    <button onclick="signMessage()">Sign Message</button>
+
+    <div id="principalInfo" class="info" style="display: none">
+      Principal ID: <span id="principalId">-</span>
+    </div>
+
+    <div id="balanceInfo" class="info" style="display: none">
+      Balance: <span id="balance">-</span> ICP
+    </div>
+
+    <p>Transfer</p>
+    <input type="text" id="recipientId" placeholder="Recipient Principal ID" />
+    <input
+      type="number"
+      id="transferAmount"
+      placeholder="Amount in ICP"
+      step="0.01"
+    />
+    <button onclick="sendTokens()">Send Tokens</button>
+
+    <div id="signatureInfo" class="info" style="display: none">
+      Signature: <span id="signatureResult">-</span>
+    </div>
+
+    <div id="approvalModal" class="modal">
+      <h3>Approve Transfer</h3>
+      <p>Recipient: <span id="modalRecipient"></span></p>
+      <p>Amount: <span id="modalAmount"></span> ICP</p>
+      <button onclick="approveTransfer(true)">Approve</button>
+      <button onclick="approveTransfer(false)">Reject</button>
+    </div>
+
+    <script>
+      let isConnected = false;
+
+      async function connectWallet() {
+        try {
+          // Check if PacaWallet is available
+          if (!window.ic?.paca) {
+            updateStatus("PacaWallet not installed", false);
+            return;
+          }
+
+          // Request connection
+          const result = await window.ic.paca.requestConnect();
+
+          if (result.connected) {
+            isConnected = true;
+            updateStatus("Connected to PacaWallet", true);
+            document.getElementById("principalInfo").style.display = "block";
+            document.getElementById("principalId").textContent =
+              result.principal;
+
+            // Get initial balance
+            await checkBalance();
+          } else {
+            updateStatus(`Connection failed: ${result.message}`, false);
+          }
+        } catch (error) {
+          updateStatus(`Error: ${error.message}`, false);
+        }
+      }
+
+      async function disconnectWallet() {
+        try {
+          if (!window.ic?.paca) {
+            updateStatus("PacaWallet not installed", false);
+            return;
+          }
+
+          window.ic.paca.disconnect();
+          isConnected = false;
+          updateStatus("Disconnected from PacaWallet", false);
+          document.getElementById("principalInfo").style.display = "none";
+          document.getElementById("balanceInfo").style.display = "none";
+        } catch (error) {
+          updateStatus(`Error: ${error.message}`, false);
+        }
+      }
+
+      async function checkBalance() {
+        try {
+          if (!window.ic?.paca) {
+            updateStatus("PacaWallet not installed", false);
+            return;
+          }
+
+          if (!isConnected) {
+            updateStatus("Please connect wallet first", false);
+            return;
+          }
+
+          const balance = await window.ic.paca.getBalance();
+          document.getElementById("balanceInfo").style.display = "block";
+          document.getElementById("balance").textContent = balance;
+        } catch (error) {
+          updateStatus(`Error: ${error.message}`, false);
+        }
+      }
+
+      function updateStatus(message, connected) {
+        const statusDiv = document.getElementById("status");
+        statusDiv.textContent = `Status: ${message}`;
+        statusDiv.className = connected ? "connected" : "disconnected";
+      }
+
+      // Check initial wallet state
+      window.addEventListener("load", async () => {
+        if (!window.ic?.paca) {
+          updateStatus("PacaWallet not installed", false);
+        } else {
+          updateStatus("PacaWallet detected - Ready to connect", false);
+        }
+      });
+
+      // transfer section
+      let currentApprovalResolve = null;
+
+      window.showTransferApproval = function (data, resolve) {
+        document.getElementById("modalRecipient").textContent = data.recipient;
+        document.getElementById("modalAmount").textContent = data.amount;
+        document.getElementById("approvalModal").classList.add("show");
+        currentApprovalResolve = resolve;
+      };
+
+      function approveTransfer(approved) {
+        document.getElementById("approvalModal").classList.remove("show");
+        if (currentApprovalResolve) {
+          currentApprovalResolve(approved);
+          currentApprovalResolve = null;
+        }
+      }
+
+      async function sendTokens() {
+        try {
+          if (!window.ic?.paca) {
+            document.getElementById("status").textContent =
+              "Status: PacaWallet not installed";
+            document.getElementById("status").className = "disconnected";
+            return;
+          }
+
+          if (!isConnected) {
+            document.getElementById("status").textContent =
+              "Status: Please connect your wallet first";
+            document.getElementById("status").className = "disconnected";
+            return;
+          }
+
+          const recipientId = document.getElementById("recipientId").value;
+          const amount = document.getElementById("transferAmount").value;
+
+          if (!recipientId || !amount) {
+            document.getElementById("status").textContent =
+              "Status: Please enter both recipient ID and amount";
+            document.getElementById("status").className = "disconnected";
+            return;
+          }
+
+          // Request transfer
+          const result = await window.ic.paca.requestTransfer(
+            recipientId,
+            amount
+          );
+
+          if (result.success) {
+            document.getElementById("status").textContent =
+              "Status: Transfer successful!";
+            document.getElementById("status").className = "connected";
+            await checkBalance(); // Refresh balance after transfer
+          } else {
+            document.getElementById("status").textContent =
+              "Status: Transfer failed - " + result.message;
+            document.getElementById("status").className = "disconnected";
+          }
+        } catch (error) {
+          document.getElementById("status").textContent =
+            "Status: Error - " + error.message;
+          document.getElementById("status").className = "disconnected";
+        }
+      }
+
+      async function signMessage() {
+        try {
+          if (!window.ic?.paca) {
+            document.getElementById("status").textContent =
+              "Status: PacaWallet not installed";
+            document.getElementById("status").className = "disconnected";
+            return;
+          }
+
+          if (!isConnected) {
+            document.getElementById("status").textContent =
+              "Status: Please connect your wallet first";
+            document.getElementById("status").className = "disconnected";
+            return;
+          }
+
+          const message = prompt("Enter message to sign:", "Hello World");
+          if (!message) return;
+
+          const result = await window.ic.paca.requestSignMessage(message);
+
+          // Safely handle the signature result
+          if (result && result.success) {
+            const signatureElement = document.getElementById("signatureInfo");
+            const signatureResult = document.getElementById("signatureResult");
+
+            if (signatureElement && signatureResult) {
+              signatureElement.style.display = "block";
+              // Convert to string and truncate if too long
+              const signatureText =
+                String(result.signature).substring(0, 100) + "...";
+              signatureResult.textContent = signatureText;
+            }
+
+            alert("Test alert");
+            document.getElementById("status").textContent =
+              "Status: Message signed successfully";
+            document.getElementById("status").className = "connected";
+          } else {
+            const errorMessage = result?.message || "Unknown error occurred";
+            document.getElementById("status").textContent =
+              "Status: Signing failed - " + errorMessage;
+            document.getElementById("status").className = "disconnected";
+          }
+        } catch (error) {
+          console.error("Signature error:", error);
+          document.getElementById("status").textContent =
+            "Status: Error during signing process";
+          document.getElementById("status").className = "disconnected";
+        }
+      }
+    </script>
+  </body>
+</html>
